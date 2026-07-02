@@ -312,11 +312,12 @@
     <div class="hero-inner">
       <p class="tag">Proyecto 2 - Sistemas Operativos</p>
       <h1>Memory Mappings en Selfie</h1>
-      <p class="subtitle">Explicación visual de mmap, munmap, msync, page cache y fork</p>
+      <p class="subtitle">Explicación visual de mmap, munmap, msync, page cache, fork, LRU y demos</p>
       <div class="objective">
         <div><strong>Objetivo 1</strong>Agregar syscalls para mapear archivos dentro del espacio virtual de un proceso emulado.</div>
         <div><strong>Objetivo 2</strong>Usar un page cache global para compartir páginas de archivo entre mappings y procesos.</div>
         <div><strong>Objetivo 3</strong>Controlar persistencia con dirty bit y msync, y heredar mappings correctamente en fork.</div>
+        <div><strong>Objetivo 4</strong>Mostrar demos replicables que prueban la implementación completa en vivo.</div>
       </div>
       <div class="mini-flow" aria-label="Proceso hacia archivo">
         <div class="flow-node">Proceso</div><div class="arrow">-></div>
@@ -350,6 +351,8 @@
         <li><a href="#fork">Fork y cache compartido</a></li>
         <li><a href="#ejemplo">Ejemplo completo</a></li>
         <li><a href="#tests">Tests del proyecto</a></li>
+        <li><a href="#mejoras">Mejoras recientes</a></li>
+        <li><a href="#demos">Demos en vivo</a></li>
         <li><a href="#linux">Comparación con Linux</a></li>
         <li><a href="#errores">Errores comunes</a></li>
         <li><a href="#resumen">Resumen final</a></li>
@@ -495,35 +498,45 @@ flowchart TD
 
     <section id="page-cache">
       <h2>6. Page Cache</h2>
-      <p class="lead">El page cache es global. Está implementado como una lista enlazada de <code>page_cache_entry</code>. Cada entrada identifica una página de un archivo y apunta a un cache frame.</p>
+      <p class="lead">El page cache es global. Está implementado como una lista enlazada de <code>page_cache_entry</code>. Cada entrada identifica una página de archivo mediante <code>file_id</code> y <code>file_page</code>, apunta a un cache frame y guarda estado de dirty, refcount y LRU.</p>
       <table>
-        <thead><tr><th>Entry</th><th>File ID</th><th>File Page</th><th>Cache Frame</th><th>Dirty</th><th>Refcount</th></tr></thead>
+        <thead><tr><th>Campo</th><th>Qué guarda</th><th>Para qué sirve</th></tr></thead>
         <tbody>
-          <tr><td>0</td><td><code>fd=3</code></td><td><code>page 0</code></td><td><code>F0</code></td><td>0 clean</td><td>1</td></tr>
-          <tr><td>1</td><td><code>fd=3</code></td><td><code>page 1</code></td><td><code>F1</code></td><td>1 dirty</td><td>2</td></tr>
-          <tr><td>2</td><td><code>fd=4</code></td><td><code>page 0</code></td><td><code>F2</code></td><td>0 clean</td><td>1</td></tr>
+          <tr><td><code>next</code></td><td>Siguiente entrada de la lista.</td><td>Recorrer el page cache global.</td></tr>
+          <tr><td><code>file_id</code></td><td>ID estable asignado al path abierto.</td><td>Compartir cache entre dos <code>fd</code> del mismo archivo.</td></tr>
+          <tr><td><code>file_page</code></td><td>Número de página dentro del archivo.</td><td>Ubicar qué bloque de archivo está cacheado.</td></tr>
+          <tr><td><code>cache_frame</code></td><td>Dirección del frame global.</td><td>Contenido real que usa la page table.</td></tr>
+          <tr><td><code>dirty</code></td><td>0 limpio, 1 modificado.</td><td>Decidir si <code>msync</code> debe hacer <code>pwrite</code>.</td></tr>
+          <tr><td><code>refcount</code></td><td>Cantidad de mappings usando la entrada.</td><td>No reemplazar páginas todavía usadas.</td></tr>
+          <tr><td><code>fd</code></td><td>Descriptor abierto más reciente.</td><td>Hacer <code>pread/pwrite</code>.</td></tr>
+          <tr><td><code>last_used</code></td><td>Marca de uso reciente.</td><td>Elegir víctima LRU cuando se llenan los frames.</td></tr>
+          <tr><td><code>flags</code></td><td>Reservado.</td><td>Extensión futura.</td></tr>
         </tbody>
       </table>
       <div class="grid-2">
         <table>
           <thead><tr><th>Pregunta</th><th>Respuesta según la implementación</th></tr></thead>
           <tbody>
-            <tr><td>Cómo se busca una página?</td><td>Se recorre la lista global buscando <code>file_id</code> y <code>file_page</code>.</td></tr>
+            <tr><td>Cómo se busca una página?</td><td>El <code>fd</code> se traduce a <code>file_id</code> y se busca <code>(file_id, file_page)</code>.</td></tr>
             <tr><td>Qué significa dirty?</td><td>El frame cambió en memoria y todavía no fue escrito con <code>msync</code>.</td></tr>
             <tr><td>Qué significa refcount?</td><td>Cuántos mappings/procesos apuntan a ese frame.</td></tr>
-            <tr><td>Cuándo se reutiliza un frame?</td><td>Cuando ya existe una entrada con el mismo <code>fd</code> y la misma página de archivo.</td></tr>
+            <tr><td>Cuándo se reutiliza un frame?</td><td>Si ya existe la entrada, se comparte; si el cache está lleno, LRU elige una entrada con <code>refcount=0</code>.</td></tr>
           </tbody>
         </table>
         <div class="mermaid-wrap">
           <pre class="mermaid">
 flowchart LR
-  A[mmap necesita fd=3 page=0] --> B{Existe page_cache_entry?}
-  B -->|Si| C[Reusar cache_frame F0]
-  B -->|No| D[allocate_cache_frame]
-  D --> E[pread archivo -> frame]
-  E --> F[crear page_cache_entry]
-  C --> G[incrementar refcount]
-  F --> G
+  A[mmap necesita fd=3 page=0] --> X[fd -> file_id por path]
+  X --> B{Existe page_cache_entry?}
+  B -->|Si| C[Reusar cache_frame]
+  B -->|No| D{Hay frame libre?}
+  D -->|Si| E[allocate_cache_frame]
+  D -->|No| L[evict LRU con refcount=0]
+  E --> F[pread archivo -> frame]
+  L --> F
+  F --> G[crear page_cache_entry]
+  C --> H[touch last_used + refcount]
+  G --> H
           </pre>
         </div>
       </div>
@@ -572,8 +585,9 @@ flowchart LR
       <h2>9. Flujo completo de mmap</h2>
       <div class="arrow-flow">
         <div class="flow-node light">mmap(fd=3, offset=0)</div><div class="arrow">-></div>
+        <div class="flow-node light">fd -> file_id</div><div class="arrow">-></div>
         <div class="flow-node light">mapping_entry</div><div class="arrow">-></div>
-        <div class="flow-node light">page_cache_entry<br>fd=3,page=0</div><div class="arrow">-></div>
+        <div class="flow-node light">page_cache_entry<br>file_id=1,page=0</div><div class="arrow">-></div>
         <div class="flow-node light">cache_frame F0</div><div class="arrow">-></div>
         <div class="flow-node light">PTE(VP)=F0</div><div class="arrow">-></div>
         <div class="flow-node light">addr retornada</div>
@@ -586,7 +600,7 @@ flowchart LR
           <tr><td>3</td><td>Valida length, prot y offset.</td><td>Control de syscall</td><td>Retorna -1 si algo no cumple.</td></tr>
           <tr><td>4</td><td>Si addr es 0, elige una zona libre.</td><td>VAS</td><td>Ejemplo: <code>0x10000000</code>.</td></tr>
           <tr><td>5</td><td>Crea <code>mapping_entry</code>.</td><td>Lista del contexto</td><td><code>mappings_head -> mapping</code>.</td></tr>
-          <tr><td>6</td><td>Busca o crea <code>page_cache_entry</code>.</td><td>Page cache global</td><td>Clave <code>fd=3,page=0</code>.</td></tr>
+          <tr><td>6</td><td>Busca o crea <code>page_cache_entry</code>.</td><td>Page cache global</td><td>Clave <code>file_id=1,page=0</code>; el <code>fd</code> solo se usa para llegar al <code>file_id</code>.</td></tr>
           <tr><td>7</td><td>Carga archivo si no estaba cacheado.</td><td>Cache frame</td><td><code>pread</code> llena F0.</td></tr>
           <tr><td>8</td><td>Actualiza page table.</td><td>PTE</td><td><code>VP -> F0</code>.</td></tr>
           <tr><td>9</td><td>Retorna dirección virtual.</td><td>Registro A0</td><td>El programa recibe <code>mapped_addr</code>.</td></tr>
@@ -751,7 +765,7 @@ flowchart TD
           <thead><tr><th>Antes de mmap</th><th>Estado</th></tr></thead>
           <tbody>
             <tr><td>PCB</td><td><code>mappings_head = NULL</code></td></tr>
-            <tr><td>Page Cache</td><td>Vacío para <code>fd=3,page=0</code></td></tr>
+            <tr><td>Page Cache</td><td>Vacío para <code>file_id=1,page=0</code></td></tr>
             <tr><td>Page Table</td><td>No existe PTE para la futura dirección mmap.</td></tr>
           </tbody>
         </table>
@@ -759,8 +773,8 @@ flowchart TD
           <thead><tr><th>Después de mmap</th><th>Estado</th></tr></thead>
           <tbody>
             <tr><td>PCB</td><td><code>mappings_head -> mapping_entry</code></td></tr>
-            <tr><td>mapping_entry</td><td><code>addr=0x10000000,length=4096,prot=0,fd=3</code></td></tr>
-            <tr><td>Page Cache</td><td>Entrada <code>fd=3,page=0 -> F0</code></td></tr>
+            <tr><td>mapping_entry</td><td><code>addr=0x10000000,length=4096,prot=0,fd=3,file_id=1</code></td></tr>
+            <tr><td>Page Cache</td><td>Entrada <code>file_id=1,page=0 -> F0</code></td></tr>
             <tr><td>Cache Frame</td><td><code>F0</code> contiene primeros 4096 bytes del archivo.</td></tr>
             <tr><td>Page Table</td><td><code>VP(0x10000000) -> F0</code></td></tr>
           </tbody>
@@ -770,7 +784,7 @@ flowchart TD
 
     <section id="tests">
       <h2>16. Tests del proyecto</h2>
-      <p class="lead">Los 4 tests ejercitan las propiedades pedidas: lectura, escritura persistente, fork compartido y no persistencia sin msync.</p>
+      <p class="lead">Los 6 tests cubren los casos pedidos por el enunciado y las mejoras finales: lectura, escritura persistente, fork compartido, no persistencia sin msync, dos fd compartiendo cache y reutilización LRU.</p>
 
       <article class="test-card">
         <h3>Test 1: Read from Memory Mapped File</h3>
@@ -822,7 +836,7 @@ flowchart TD
           <tbody>
             <tr><td>PCB</td><td>Tiene su lista de mappings</td><td>Tiene copia de metadata</td><td>No es el mismo PCB.</td></tr>
             <tr><td>Page Table</td><td><code>VP -> F0</code></td><td><code>VP -> F0</code></td><td>Ambos apuntan a F0.</td></tr>
-            <tr><td>Page Cache</td><td colspan="2"><code>fd=3,page=0,frame=F0,refcount=2</code></td><td>Sí.</td></tr>
+            <tr><td>Page Cache</td><td colspan="2"><code>file_id=1,page=0,frame=F0,refcount=2</code></td><td>Sí.</td></tr>
           </tbody>
         </table>
         <div class="key">Que pase significa que el fork no duplicó el cache frame y que el padre ve el cambio escrito por el hijo.</div>
@@ -841,19 +855,164 @@ flowchart TD
           </tbody>
         </table>
       </article>
+
+      <article class="test-card">
+        <h3>Test 5: Two FDs Shared Cache</h3>
+        <p>Abre el mismo archivo dos veces, obtiene dos <code>fd</code> distintos, crea dos mappings y verifica que ambos ven el mismo cache frame.</p>
+        <div class="pill-row"><span class="tag">open fd1</span><span class="tag">open fd2</span><span class="tag">file_id compartido</span><span class="tag">map1 escribe</span><span class="tag">map2 lee</span></div>
+        <table>
+          <thead><tr><th>Paso</th><th>Qué demuestra</th><th>Resultado esperado</th></tr></thead>
+          <tbody>
+            <tr><td><code>fd1 = open(path)</code> y <code>fd2 = open(path)</code></td><td>Dos descriptores distintos del mismo path.</td><td>Ambos quedan asociados al mismo <code>file_id</code>.</td></tr>
+            <tr><td><code>map1</code> escribe un valor</td><td>La página se modifica en el cache frame.</td><td><code>dirty=1</code>.</td></tr>
+            <tr><td><code>map2</code> lee el valor</td><td>Ambos mappings comparten la entrada del page cache.</td><td>Lee exactamente lo que escribió <code>map1</code>.</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="test-card">
+        <h3>Test 6: LRU Reuse</h3>
+        <p>Mapea y desmapea 260 páginas aunque solo hay 256 cache frames. Si LRU no funcionara, el test se quedaría sin frames.</p>
+        <div class="pill-row"><span class="tag">256 frames</span><span class="tag">260 páginas</span><span class="tag">munmap</span><span class="tag">refcount=0</span><span class="tag">LRU</span></div>
+        <table>
+          <thead><tr><th>Situación</th><th>Qué hace el page cache</th><th>Por qué pasa</th></tr></thead>
+          <tbody>
+            <tr><td>Hay frames libres</td><td>Usa <code>allocate_cache_frame()</code>.</td><td>Aún no se llenó el arreglo global.</td></tr>
+            <tr><td>Se llenan los 256 frames</td><td>Busca víctima con <code>refcount=0</code>.</td><td>Las páginas anteriores fueron desmapeadas.</td></tr>
+            <tr><td>Hay varias candidatas</td><td>Elige la menor <code>last_used</code>.</td><td>LRU simple.</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+
+    <section id="mejoras">
+      <h2>17. Mejoras recientes del page cache</h2>
+      <p class="lead">Después de la primera versión funcional se agregaron dos mejoras puntuales: identidad estable por path para compartir cache entre <code>fd</code> distintos, y reemplazo LRU simple para reutilizar cache frames.</p>
+      <div class="grid-2">
+        <article class="test-card">
+          <h3>Identidad <code>fd -> file_id</code></h3>
+          <p>Cuando <code>openat</code> abre un archivo, se registra el path en una tabla interna. Si el mismo path se abre otra vez, el nuevo <code>fd</code> reutiliza el mismo <code>file_id</code>.</p>
+          <pre><code>fd1 = open("archivo.txt", ...)
+fd2 = open("archivo.txt", ...)
+fd1 != fd2
+file_id(fd1) == file_id(fd2)</code></pre>
+          <div class="key">Esto permite que dos mappings del mismo archivo compartan la misma entrada del page cache.</div>
+        </article>
+        <article class="test-card">
+          <h3>LRU simple</h3>
+          <p>Cada entrada guarda <code>last_used</code>. Si no quedan cache frames libres, se busca una entrada con <code>refcount=0</code> y se reemplaza la menos usada recientemente.</p>
+          <pre><code>si no hay frame libre:
+  victima = menor last_used con refcount == 0
+  si dirty: pwrite(...)
+  reutilizar frame</code></pre>
+          <div class="key">No se reemplaza una página que todavía está mapeada por algún proceso.</div>
+        </article>
+      </div>
+      <table>
+        <thead><tr><th>Cambio</th><th>Archivo / función</th><th>Impacto</th></tr></thead>
+        <tbody>
+          <tr><td>Page cache entry de 9 palabras</td><td><code>PAGE_CACHE_ENTRY_SIZE</code></td><td>Agrega <code>fd</code> y <code>last_used</code>.</td></tr>
+          <tr><td>Registro de path abierto</td><td><code>register_file_identity</code> en <code>openat</code></td><td>Dos fd del mismo path comparten <code>file_id</code>.</td></tr>
+          <tr><td>Busqueda por <code>file_id</code></td><td><code>find_page_cache_entry</code></td><td>El page cache ya no depende directamente del número de fd.</td></tr>
+          <tr><td>Reemplazo LRU</td><td><code>evict_page_cache_entry</code></td><td>Permite superar los 256 frames reutilizando entradas no referenciadas.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="demos">
+      <h2>18. Demos en vivo</h2>
+      <p class="lead">Las demos están en la carpeta <code>demos/</code>. Cada una tiene fixtures, código fuente, script ejecutable y README. Los scripts regeneran su runtime, compilan lo necesario y muestran una salida limpia para clase.</p>
+
+      <article class="test-card">
+        <h3>Demo 1: Editor mágico con mmap</h3>
+        <p><strong>Ruta:</strong> <code>demos/01_editor_magico/run_demo.sh</code></p>
+        <p>Esta demo empieza con un archivo <code>broken.c</code> roto porque comienza con <code>xint64_t</code>. Primero se intenta arreglar escribiendo <code>uint64_t</code> desde memoria mapeada pero sin <code>msync</code>; el archivo sigue roto. Luego se repite con <code>msync</code> y Selfie logra compilarlo.</p>
+        <div class="arrow-flow">
+          <div class="flow-node light">broken.c falla</div><div class="arrow">-></div>
+          <div class="flow-node light">mmap sin msync</div><div class="arrow">-></div>
+          <div class="flow-node light">sigue fallando</div><div class="arrow">-></div>
+          <div class="flow-node light">mmap + msync</div><div class="arrow">-></div>
+          <div class="flow-node light">compila</div>
+        </div>
+        <table>
+          <thead><tr><th>Parte</th><th>Qué muestra</th></tr></thead>
+          <tbody>
+            <tr><td><code>fix_without_msync.c</code></td><td>Escribir en el mapping no alcanza para persistir.</td></tr>
+            <tr><td><code>fix_with_msync.c</code></td><td><code>msync</code> persiste los 8 bytes modificados.</td></tr>
+            <tr><td><code>broken.c</code> final</td><td>El archivo pasa de <code>xint64_t</code> a <code>uint64_t</code>.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>Demo 1 - Editor magico con mmap
+Paso 3: corrijo con mmap, pero sin msync
+MSYNC: NO USADO
+OK: sin msync el archivo sigue roto
+Paso 6: corrijo con mmap + msync
+MSYNC: OK
+PASS: con msync el archivo fue corregido</code></pre>
+      </article>
+
+      <article class="test-card">
+        <h3>Demo 2: Dos procesos, una misma pizarra</h3>
+        <p><strong>Ruta:</strong> <code>demos/02_pizarra_fork/run_demo.sh</code></p>
+        <p>El padre crea un mapping de <code>shared-board.txt</code>, escribe <code>PARENT!!</code> y luego hace <code>fork</code>. El hijo lee ese valor desde el mapping heredado, escribe <code>CHILD!!!</code>, y el padre ve el cambio desde su propio mapping.</p>
+        <div class="arrow-flow">
+          <div class="flow-node light">padre mmap</div><div class="arrow">-></div>
+          <div class="flow-node light">padre escribe</div><div class="arrow">-></div>
+          <div class="flow-node light">fork</div><div class="arrow">-></div>
+          <div class="flow-node light">hijo escribe</div><div class="arrow">-></div>
+          <div class="flow-node light">padre lee</div>
+        </div>
+        <table>
+          <thead><tr><th>Evento</th><th>Estructura que se valida</th></tr></thead>
+          <tbody>
+            <tr><td>Hijo ve <code>PARENT!!</code></td><td>El mapping fue heredado.</td></tr>
+            <tr><td>Padre ve <code>CHILD!!!</code></td><td>Ambos apuntan al mismo cache frame.</td></tr>
+            <tr><td><code>msync</code> final</td><td>El archivo queda con <code>CHILD!!!</code>.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>PADRE: ESCRIBE PARENT!!
+HIJO: VIO PARENT!!
+HIJO: ESCRIBE CHILD!!!
+PADRE: VIO CHILD!!!
+MSYNC: OK
+Resultado: DEMO 2 PASS</code></pre>
+      </article>
+
+      <article class="test-card">
+        <h3>Demo 3: Mini sistema de archivos viviente</h3>
+        <p><strong>Ruta:</strong> <code>demos/03_sistema_archivos_viviente/run_demo.sh</code></p>
+        <p>Esta demo combina dos <code>fd</code> del mismo archivo, dos mappings, <code>fork</code>, page cache compartido, dirty bit, <code>msync</code> y <code>munmap</code>. Es la demo más completa para mostrar que las piezas trabajan juntas.</p>
+        <table>
+          <thead><tr><th>Paso</th><th>Qué valida</th></tr></thead>
+          <tbody>
+            <tr><td><code>map1</code> escribe <code>ALIVE001</code></td><td>Escritura sobre memoria mapeada.</td></tr>
+            <tr><td><code>map2</code> ve <code>ALIVE001</code></td><td>Dos fd comparten page cache por <code>file_id</code>.</td></tr>
+            <tr><td>Hijo escribe <code>ALIVE002</code></td><td>Fork comparte cache frame.</td></tr>
+            <tr><td>Padre ve <code>ALIVE002</code></td><td>La comunicación ocurre por memoria mapeada.</td></tr>
+            <tr><td><code>msync</code></td><td>El archivo final queda con <code>ALIVE002</code>.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>MAP1: ESCRIBE ALIVE001
+MAP2: VIO ALIVE001
+HIJO: ESCRIBE ALIVE002
+PADRE: VIO ALIVE002
+MSYNC: OK
+Resultado: DEMO 3 PASS</code></pre>
+      </article>
     </section>
 
     <section id="linux">
-      <h2>17. Comparación con Linux real</h2>
+      <h2>19. Comparación con Linux real</h2>
       <table>
         <thead><tr><th>Aspecto</th><th>Selfie simplificado</th><th>Linux real</th></tr></thead>
         <tbody>
           <tr><td><code>mmap</code></td><td>Crea mapping inmediato y PTEs hacia cache frames.</td><td>Puede usar carga perezosa por page faults.</td></tr>
           <tr><td><code>munmap</code></td><td>Quita mapping y no persiste.</td><td>También desmapea; la persistencia depende de flags y writeback.</td></tr>
           <tr><td><code>msync</code></td><td>Único mecanismo de persistencia del proyecto.</td><td>Fuerza sincronización según flags y políticas del kernel.</td></tr>
-          <tr><td>Page cache</td><td>Lista global simple de entradas.</td><td>Subsistema complejo con radix/xarray, writeback, LRU, locks.</td></tr>
+          <tr><td>Page cache</td><td>Lista global con identidad por path, refcount, dirty y LRU simple.</td><td>Subsistema complejo con radix/xarray, writeback, LRU, locks e identidad por inode/archivo.</td></tr>
           <tr><td>Permisos</td><td><code>0=READ, 1=WRITE, 2=READ_WRITE</code>.</td><td>Flags bitmask: <code>PROT_READ</code>, <code>PROT_WRITE</code>, etc.</td></tr>
-          <tr><td>File descriptors</td><td>Se usa <code>fd</code> como <code>file_id</code> simplificado.</td><td>Usa estructuras de archivo/inodo y objetos globales.</td></tr>
+          <tr><td>File descriptors</td><td>Se traduce <code>fd -> file_id</code> usando el path registrado en <code>openat</code>.</td><td>Usa estructuras de archivo/inodo y objetos globales.</td></tr>
           <tr><td>Lazy loading</td><td>No es el foco; se carga al mapear.</td><td>Normalmente se carga bajo demanda.</td></tr>
           <tr><td>Dirty pages</td><td>Dirty bit explícito por page cache entry.</td><td>Dirty tracking integrado con VM y page cache.</td></tr>
           <tr><td>Fork</td><td>Mappings comparten cache frames; memoria normal se copia.</td><td>Usa copy-on-write y VMAs compartidas/privadas.</td></tr>
@@ -862,7 +1021,7 @@ flowchart TD
     </section>
 
     <section id="errores">
-      <h2>18. Errores comunes</h2>
+      <h2>20. Errores comunes</h2>
       <table>
         <thead><tr><th>Error</th><th>Por qué pasa</th><th>Cómo evitarlo</th></tr></thead>
         <tbody>
@@ -871,29 +1030,31 @@ flowchart TD
           <tr><td>Creer que fork duplica cache frames.</td><td>La memoria normal sí se copia.</td><td>En mmap, hijo y padre apuntan al mismo frame.</td></tr>
           <tr><td>Olvidar refcount.</td><td>El frame parece pertenecer a un solo proceso.</td><td>Mirar cuántos mappings apuntan al mismo entry.</td></tr>
           <tr><td>Creer que dirty significa archivo actualizado.</td><td>Dirty suena a "ya cambió".</td><td>Dirty significa "cambió en memoria, falta msync".</td></tr>
-          <tr><td>Usar fd como file id global sin aclararlo.</td><td>Es una simplificación del proyecto.</td><td>Explicar que Linux real usaría identidad de archivo más robusta.</td></tr>
+          <tr><td>Creer que dos fd siempre significan dos archivos distintos.</td><td>Un mismo path puede abrirse varias veces.</td><td>En este proyecto se registra <code>fd -> file_id</code> por path; Linux real usaría inode/archivo.</td></tr>
+          <tr><td>Reemplazar una página todavía usada.</td><td>LRU sin refcount sería inseguro.</td><td>Solo elegir víctimas con <code>refcount=0</code>.</td></tr>
         </tbody>
       </table>
     </section>
 
     <section id="resumen">
-      <h2>19. Resumen final</h2>
+      <h2>21. Resumen final</h2>
       <table>
         <thead><tr><th>Componente</th><th>Función principal</th><th>Ejemplo</th></tr></thead>
         <tbody>
           <tr><td><code>mmap</code></td><td>Crea la relación entre memoria virtual y archivo.</td><td><code>mmap(0,4096,0,fd,0)</code></td></tr>
           <tr><td><code>mapping_entry</code></td><td>Describe el rango virtual mapeado.</td><td><code>addr=0x10000000,length=4096</code></td></tr>
           <tr><td>Page Table</td><td>Permite acceder al frame desde una dirección virtual.</td><td><code>VP -> F0</code></td></tr>
-          <tr><td>Page Cache</td><td>Guarda entradas globales por archivo y página.</td><td><code>fd=3,page=0</code></td></tr>
+          <tr><td>Page Cache</td><td>Guarda entradas globales por archivo y página.</td><td><code>file_id=1,page=0</code></td></tr>
           <tr><td>Cache Frame</td><td>Contiene una página del archivo.</td><td><code>F0 = bytes 0..4095</code></td></tr>
           <tr><td>Dirty</td><td>Marca cambios pendientes de guardar.</td><td><code>dirty=1</code> después de write.</td></tr>
           <tr><td>Refcount</td><td>Cuenta cuántos mappings usan un frame.</td><td><code>2</code> después de fork.</td></tr>
           <tr><td><code>fork</code></td><td>Comparte cache frames entre padre e hijo.</td><td>Padre e hijo apuntan a F0.</td></tr>
+          <tr><td><code>LRU</code></td><td>Reutiliza frames cuando el cache se llena.</td><td>Víctima con <code>refcount=0</code>.</td></tr>
           <tr><td><code>msync</code></td><td>Persiste cambios dirty al archivo.</td><td><code>pwrite(F0)</code>.</td></tr>
         </tbody>
       </table>
       <div class="key" style="font-size: 1.15rem;">
-        mmap crea la relación, page cache guarda las páginas, la page table permite accederlas, fork las comparte y msync las persiste.
+        mmap crea la relación, page cache guarda las páginas, la page table permite accederlas, fork las comparte, LRU reutiliza frames y msync persiste los cambios.
       </div>
     </section>
   </main>
