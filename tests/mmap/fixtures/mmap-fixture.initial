@@ -1,0 +1,7 @@
+MMAPDATA: stable fixture for Selfie mmap tests.
+This file is copied to artifacts/tests/runtime before each test.
+The tests may modify bytes around offset 256 without touching project sources.
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+END OF MMAP FIXTURE.
