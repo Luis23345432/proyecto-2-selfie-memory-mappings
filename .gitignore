@@ -26,3 +26,8 @@ artifacts/tests/runtime/
 # Local/editor files
 .vscode/
 .idea/
+
+# Generated demo artifacts
+demos/**/bin/
+demos/**/logs/
+demos/**/runtime/
