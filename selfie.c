@@ -1321,7 +1321,7 @@ uint64_t SYSCALL_BRK    = 214;
 uint64_t SYSCALL_FORK	= 215;
 uint64_t SYSCALL_WAIT	= 216;
 
-// memory mapping syscalls
+// syscalls nuevas para mmap
 uint64_t SYSCALL_MMAP   = 222;
 uint64_t SYSCALL_MUNMAP = 223;
 uint64_t SYSCALL_MSYNC  = 224;
@@ -1333,13 +1333,13 @@ uint64_t SYSCALL_MSYNC  = 224;
 uint64_t DIRFD_AT_FDCWD = -100;
 
 // -----------------------------------------------------------------
-// -------------------- MEMORY MAPPINGS CONFIG ---------------------
+// -------------------- CONFIG DE MEMORY MAPPINGS ------------------
 // -----------------------------------------------------------------
 
-// mapping entry offsets (8 words per entry)
+// cada mapping ocupa 8 palabras
 uint64_t MAPPING_ENTRY_SIZE = 8;
 
-// mapping entry field offsets
+// campos del mapping
 uint64_t MAPPING_NEXT           = 0;
 uint64_t MAPPING_ADDR           = 1;
 uint64_t MAPPING_ORIG_LENGTH    = 2;
@@ -1349,10 +1349,10 @@ uint64_t MAPPING_FD             = 5;
 uint64_t MAPPING_FILE_OFFSET    = 6;
 uint64_t MAPPING_FLAGS          = 7;
 
-// page cache entry offsets (9 words per entry)
+// cada entrada del page cache ocupa 9 palabras
 uint64_t PAGE_CACHE_ENTRY_SIZE = 9;
 
-// page cache entry field offsets
+// campos del page cache
 uint64_t PAGECACHE_NEXT        = 0;
 uint64_t PAGECACHE_FILE_ID     = 1;
 uint64_t PAGECACHE_FILE_PAGE   = 2;
@@ -1363,17 +1363,17 @@ uint64_t PAGECACHE_FD          = 6;
 uint64_t PAGECACHE_LAST_USED   = 7;
 uint64_t PAGECACHE_FLAGS       = 8;
 
-// page cache constants
+// limites del page cache
 uint64_t NUMBEROFCACHEFRAMES = 256;
 uint64_t MAX_TRACKED_FILE_DESCRIPTORS = 1024;
 uint64_t MAX_TRACKED_FILES = 1024;
 
-// mapping protection values required by Proyecto 2
+// permisos usados por el enunciado
 uint64_t PROT_READ       = 0;
 uint64_t PROT_WRITE      = 1;
 uint64_t PROT_READ_WRITE = 2;
 
-// mapping flags
+// estado del mapping
 uint64_t MAPPING_ACTIVE = 1;
 
 // ------------------------ GLOBAL VARIABLES -----------------------
@@ -1381,15 +1381,15 @@ uint64_t MAPPING_ACTIVE = 1;
 uint64_t* IO_buffer      = (uint64_t*) 0;
 uint64_t  IO_buffer_size = 0;
 
-// page cache and cache frames for memory mappings
-uint64_t* cache_frames = (uint64_t*) 0;           // Array of cache frames
-uint64_t* page_cache_entries = (uint64_t*) 0;    // Linked list of page cache entries
-uint64_t next_cache_frame_index = 0;             // Index for cache frame allocation
-uint64_t cache_frames_allocated = 0;             // Number of allocated cache frames
-uint64_t page_cache_clock = 1;                    // Monotonic counter for simple LRU
-uint64_t* fd_file_ids = (uint64_t*) 0;            // fd -> stable file id
-uint64_t* file_id_names = (uint64_t*) 0;          // file id -> copied path string
-uint64_t next_file_id = 1;                        // 0 means unknown/unregistered
+// cache global para los mappings
+uint64_t* cache_frames = (uint64_t*) 0;           // frames del cache
+uint64_t* page_cache_entries = (uint64_t*) 0;    // lista de paginas cacheadas
+uint64_t next_cache_frame_index = 0;             // siguiente frame libre
+uint64_t cache_frames_allocated = 0;             // frames ya usados
+uint64_t page_cache_clock = 1;                    // reloj simple para LRU
+uint64_t* fd_file_ids = (uint64_t*) 0;            // fd a id de archivo
+uint64_t* file_id_names = (uint64_t*) 0;          // id a path copiado
+uint64_t next_file_id = 1;                        // 0 significa no registrado
 
 // -----------------------------------------------------------------
 // ------------------------ HYPSTER SYSCALL ------------------------
@@ -2476,10 +2476,10 @@ uint64_t is_valid_segment_read(uint64_t vaddr);
 uint64_t is_valid_segment_write(uint64_t vaddr);
 
 // -----------------------------------------------------------------
-// ------------------- MEMORY MAPPINGS INTERFACE -------------------
+// ------------------- INTERFAZ DE MEMORY MAPPINGS -----------------
 // -----------------------------------------------------------------
 
-// mapping entry getters and setters
+// funciones para leer/escribir mapping_entry
 uint64_t* get_mapping_next(uint64_t* mapping)           { return (uint64_t*) *(mapping + MAPPING_NEXT); }
 uint64_t  get_mapping_addr(uint64_t* mapping)           { return             *(mapping + MAPPING_ADDR); }
 uint64_t  get_mapping_original_length(uint64_t* mapping) { return             *(mapping + MAPPING_ORIG_LENGTH); }
@@ -2498,7 +2498,7 @@ void set_mapping_fd(uint64_t* mapping, uint64_t fd)                { *(mapping +
 void set_mapping_offset(uint64_t* mapping, uint64_t offset)        { *(mapping + MAPPING_FILE_OFFSET) = offset; }
 void set_mapping_flags(uint64_t* mapping, uint64_t flags)          { *(mapping + MAPPING_FLAGS) = flags; }
 
-// page cache entry getters and setters
+// funciones para leer/escribir page_cache_entry
 uint64_t* get_page_cache_next(uint64_t* entry)           { return (uint64_t*) *(entry + PAGECACHE_NEXT); }
 uint64_t  get_page_cache_file_id(uint64_t* entry)       { return             *(entry + PAGECACHE_FILE_ID); }
 uint64_t  get_page_cache_file_page(uint64_t* entry)     { return             *(entry + PAGECACHE_FILE_PAGE); }
@@ -2517,7 +2517,7 @@ void set_page_cache_refcount(uint64_t* entry, uint64_t refcount) { *(entry + PAG
 void set_page_cache_fd(uint64_t* entry, uint64_t fd)         { *(entry + PAGECACHE_FD) = fd; }
 void set_page_cache_last_used(uint64_t* entry, uint64_t used) { *(entry + PAGECACHE_LAST_USED) = used; }
 
-// page cache helper functions
+// funciones auxiliares del page cache
 void init_page_cache();
 void init_file_identity_table();
 void register_file_identity(uint64_t fd, char* filename);
@@ -2531,7 +2531,7 @@ void increment_page_cache_refcount(uint64_t* entry);
 void decrement_page_cache_refcount(uint64_t* entry);
 void mark_page_cache_entry_dirty(uint64_t* entry);
 
-// mapping helper functions
+// funciones auxiliares de mappings
 uint64_t* create_mapping_entry(uint64_t addr, uint64_t orig_length, uint64_t rounded_length,
                                 uint64_t prot, uint64_t fd, uint64_t offset);
 uint64_t* find_mapping(uint64_t* context, uint64_t addr);
@@ -2545,7 +2545,7 @@ uint64_t  choose_mmap_address(uint64_t* context, uint64_t length);
 void add_mapping_to_context(uint64_t* context, uint64_t* mapping);
 void remove_mapping_from_context(uint64_t* context, uint64_t addr);
 
-// fork support for mappings
+// soporte de mappings en fork
 uint64_t is_address_in_any_mapping(uint64_t* context, uint64_t vaddr);
 uint64_t* find_mapping_for_address(uint64_t* context, uint64_t vaddr);
 uint64_t is_valid_mapping_read(uint64_t vaddr);
@@ -2553,11 +2553,11 @@ uint64_t is_valid_mapping_write(uint64_t vaddr);
 void mark_mapping_page_dirty(uint64_t vaddr);
 void inherit_mappings_on_fork(uint64_t* parent, uint64_t* child);
 
-// I/O support for page cache
+// I/O real del page cache
 uint64_t load_file_page_into_cache_frame(uint64_t fd, uint64_t file_page, uint64_t* frame);
 uint64_t write_cache_frame_to_file(uint64_t fd, uint64_t file_page, uint64_t* frame, uint64_t bytes_to_write);
 
-// syscall implementations
+// syscalls de memory mappings
 void implement_mmap(uint64_t* context);
 void implement_munmap(uint64_t* context);
 void implement_msync(uint64_t* context);
@@ -8059,6 +8059,8 @@ void implement_openat(uint64_t* context) {
 
     opened_fd = open(filename_buffer, flags, mode);
     *(get_regs(context) + REG_A0) = opened_fd;
+
+    // Registro el path para compartir cache entre fd distintos.
     register_file_identity(opened_fd, filename_buffer);
   } else
     *(get_regs(context) + REG_A0) = sign_shrink(-1, SYSCALL_BITWIDTH);
@@ -8247,14 +8249,14 @@ void implement_fork(uint64_t* context) {
 		i = i + 1;
 	}
 
-	/* Inherit mappings from parent (FASE 6) */
+	/* El hijo hereda los mappings del padre. */
 	inherit_mappings_on_fork(context, child);
 
 	/* Copy low pages */
 	page = get_lowest_lo_page(context);
 	vaddr = page * PAGESIZE;
 	while (get_page_of_virtual_address(vaddr) < get_highest_lo_page(context)) {
-		// Skip unmapped holes and file-backed mappings.
+		// No copio huecos ni paginas respaldadas por mmap.
 		if (is_virtual_address_mapped(get_pt(context), vaddr))
 			if (is_address_in_any_mapping(context, vaddr) == 0)
 				map_and_store (child, vaddr, load_virtual_memory(get_pt(context), vaddr));
@@ -8265,7 +8267,7 @@ void implement_fork(uint64_t* context) {
 	page = get_lowest_hi_page(context);
 	vaddr = page * PAGESIZE;
 	while (get_page_of_virtual_address(vaddr) < get_highest_hi_page(context)) {
-		// Skip unmapped holes and file-backed mappings.
+		// No copio huecos ni paginas respaldadas por mmap.
 		if (is_virtual_address_mapped(get_pt(context), vaddr))
 			if (is_address_in_any_mapping(context, vaddr) == 0)
 				map_and_store (child, vaddr, load_virtual_memory(get_pt(context), vaddr));
@@ -11409,7 +11411,7 @@ void init_context(uint64_t* context, uint64_t* parent, uint64_t* vctxt) {
   set_status(context, STATUS_READY);
   set_nchildren(context, 0);
 
-  // memory mappings
+  // mappings del proceso
   set_mappings_head(context, (uint64_t*) 0);
 }
 
@@ -12039,6 +12041,7 @@ void register_file_identity(uint64_t fd, char* filename) {
 
   init_file_identity_table();
 
+  // Reuso el id si el path ya estaba registrado.
   file_id = 1;
   while (file_id < next_file_id) {
     if (*(file_id_names + file_id) != 0)
@@ -12050,6 +12053,7 @@ void register_file_identity(uint64_t fd, char* filename) {
     file_id = file_id + 1;
   }
 
+  // Si es un path nuevo, creo un file_id.
   if (next_file_id < MAX_TRACKED_FILES) {
     *(file_id_names + next_file_id) = (uint64_t) string_copy(filename);
     *(fd_file_ids + fd) = next_file_id;
@@ -12064,6 +12068,7 @@ uint64_t get_file_id_for_fd(uint64_t fd) {
     if (*(fd_file_ids + fd) != 0)
       return *(fd_file_ids + fd);
 
+  // Caso de respaldo para fd no registrados.
   return MAX_TRACKED_FILES + fd;
 }
 
@@ -12088,6 +12093,7 @@ uint64_t* evict_page_cache_entry() {
   victim_prev = (uint64_t*) 0;
   oldest = 0;
 
+  // Solo puedo reemplazar paginas que nadie esta usando.
   while (entry != (uint64_t*) 0) {
     if (get_page_cache_refcount(entry) == 0)
       if (victim == (uint64_t*) 0 || get_page_cache_last_used(entry) < oldest) {
@@ -12103,6 +12109,7 @@ uint64_t* evict_page_cache_entry() {
   if (victim == (uint64_t*) 0)
     return (uint64_t*) 0;
 
+  // Si la victima esta dirty, primero intento persistirla.
   if (get_page_cache_dirty(victim))
     if (write_cache_frame_to_file(get_page_cache_fd(victim), get_page_cache_file_page(victim),
                                   get_page_cache_frame(victim), PAGESIZE) == 0)
@@ -12181,7 +12188,7 @@ uint64_t* find_or_create_cache_entry(uint64_t fd, uint64_t file_page) {
   set_page_cache_fd(entry, fd);
   touch_page_cache_entry(entry);
 
-  // Load file page into cache frame (FASE 7)
+  // Cargo la pagina del archivo al cache frame.
   if (load_file_page_into_cache_frame(fd, file_page, frame) == 0)
     return (uint64_t*) 0;
 
@@ -12212,7 +12219,7 @@ void mark_page_cache_entry_dirty(uint64_t* entry) {
     set_page_cache_dirty(entry, 1);
 }
 
-// Mapping helper functions
+// Helpers para la lista de mappings
 
 uint64_t* create_mapping_entry(uint64_t addr, uint64_t orig_length, uint64_t rounded_length,
                                 uint64_t prot, uint64_t fd, uint64_t offset) {
@@ -12381,7 +12388,7 @@ void remove_mapping_from_context(uint64_t* context, uint64_t addr) {
       else
         set_mappings_head(context, get_mapping_next(mapping));
 
-      set_mapping_flags(mapping, 0);  // mark inactive
+      set_mapping_flags(mapping, 0);  // lo dejo inactivo
       return;
     }
 
@@ -12391,7 +12398,7 @@ void remove_mapping_from_context(uint64_t* context, uint64_t addr) {
 }
 
 // =====================================================================
-// FASE 6: FORK SUPPORT FOR MAPPINGS
+// SOPORTE DE MAPPINGS EN FORK
 // =====================================================================
 
 uint64_t is_address_in_any_mapping(uint64_t* context, uint64_t vaddr) {
@@ -12466,10 +12473,10 @@ void inherit_mappings_on_fork(uint64_t* parent, uint64_t* child) {
   uint64_t vaddr_current;
   uint64_t cache_frame;
 
-  // Copy each mapping from parent to child
+  // Copio la metadata del mapping al hijo.
   mapping = get_mappings_head(parent);
   while (mapping != (uint64_t*) 0) {
-    // Create new mapping entry for child with same properties
+    // El hijo conserva la misma direccion y permisos.
     child_mapping = create_mapping_entry(
       get_mapping_addr(mapping),
       get_mapping_original_length(mapping),
@@ -12479,7 +12486,7 @@ void inherit_mappings_on_fork(uint64_t* parent, uint64_t* child) {
       get_mapping_offset(mapping)
     );
 
-    // FASE 10: For each page in the mapping, increment cache refcount and map in child's page table
+    // Cada pagina del hijo apunta al mismo cache frame.
     page_count = get_mapping_rounded_length(mapping) / PAGESIZE;
     for (i = 0; i < page_count; i = i + 1) {
       file_page = get_mapping_offset(mapping) / PAGESIZE + i;
@@ -12489,24 +12496,24 @@ void inherit_mappings_on_fork(uint64_t* parent, uint64_t* child) {
       cache_entry = find_page_cache_entry(get_mapping_fd(mapping), file_page);
       
       if (cache_entry != (uint64_t*) 0) {
-        // Increment refcount for shared cache frame
+        // Aumento refcount porque ahora tambien lo usa el hijo.
         increment_page_cache_refcount(cache_entry);
 
-        // FASE 10: Map the cache frame in child's page table
-        // Both parent and child now point to the same cache frame
+        // Mapeo el frame compartido en la tabla del hijo.
+        // Padre e hijo ven la misma memoria.
         cache_frame = (uint64_t) get_page_cache_frame(cache_entry);
         map_page(child, vpage, cache_frame);
       }
     }
 
-    // Add mapping to child context
+    // Registro el mapping en el contexto del hijo.
     add_mapping_to_context(child, child_mapping);
     mapping = get_mapping_next(mapping);
   }
 }
 
 // =====================================================================
-// FASE 7: I/O FILE SUPPORT FOR PAGE CACHE
+// I/O REAL PARA EL PAGE CACHE
 // =====================================================================
 
 uint64_t load_file_page_into_cache_frame(uint64_t fd, uint64_t file_page, uint64_t* frame) {
@@ -12514,18 +12521,18 @@ uint64_t load_file_page_into_cache_frame(uint64_t fd, uint64_t file_page, uint64
   uint64_t bytes_read;
   int host_fd;
 
-  // FASE 7: Read page from file using pread (positioned read)
+  // Leo una pagina del archivo sin mover el offset.
   file_offset = file_page * PAGESIZE;
   host_fd = (int) fd;
 
-  // Use pread to read from specific offset without changing file position
-  // pread(fd, buffer, count, offset) returns number of bytes read
+  // pread lee desde una posicion fija.
+  // Si devuelve mas de PAGESIZE, fue error por -1 casteado.
   bytes_read = pread(host_fd, (void*) frame, PAGESIZE, file_offset);
 
-  // If file is smaller than PAGESIZE, remaining bytes are already zeroed
-  // by allocate_cache_frame (which uses zmalloc). bytes_read may be less
-  // than PAGESIZE at EOF; values greater than PAGESIZE indicate an error
-  // such as pread returning -1 cast to uint64_t.
+  // Si el archivo termina antes, el resto queda en cero.
+  // El frame viene de zmalloc.
+  // EOF parcial es valido.
+  // Error real se detecta abajo.
   if (bytes_read <= PAGESIZE)
     return 1;
   else
@@ -12537,15 +12544,15 @@ uint64_t write_cache_frame_to_file(uint64_t fd, uint64_t file_page, uint64_t* fr
   uint64_t bytes_written;
   int host_fd;
 
-  // FASE 7: Write page to file using pwrite (positioned write)
+  // Escribo al archivo sin mover el offset.
   file_offset = file_page * PAGESIZE;
   host_fd = (int) fd;
 
   if (bytes_to_write > PAGESIZE)
     bytes_to_write = PAGESIZE;
 
-  // Use pwrite to write at specific offset without changing file position
-  // pwrite(fd, buffer, count, offset) returns number of bytes written
+  // pwrite escribe desde una posicion fija.
+  // Debe escribir exactamente los bytes pedidos.
   bytes_written = pwrite(host_fd, (void*) frame, bytes_to_write, file_offset);
 
   if (bytes_written == bytes_to_write)
@@ -12554,7 +12561,7 @@ uint64_t write_cache_frame_to_file(uint64_t fd, uint64_t file_page, uint64_t* fr
     return 0;
 }
 
-// SYSCALL IMPLEMENTATIONS
+// SYSCALLS DE MEMORY MAPPINGS
 
 void implement_mmap(uint64_t* context) {
   uint64_t addr;
@@ -12571,14 +12578,14 @@ void implement_mmap(uint64_t* context) {
 
   init_page_cache();
 
-  // Get arguments from registers
+  // Leo argumentos desde registros.
   addr = *(get_regs(context) + REG_A0);
   length = *(get_regs(context) + REG_A1);
   prot = *(get_regs(context) + REG_A2);
   fd = *(get_regs(context) + REG_A3);
   offset = *(get_regs(context) + REG_A4);
 
-  // Validate length, protection, and file offset.
+  // Valido longitud, permisos y offset.
   if (length == 0) {
     *(get_regs(context) + REG_A0) = (uint64_t)-1;
     set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
@@ -12597,7 +12604,7 @@ void implement_mmap(uint64_t* context) {
     return;
   }
 
-  // Round length to PAGESIZE.
+  // Redondeo a paginas completas.
   rounded_length = round_up(length, PAGESIZE);
   if (rounded_length < length) {
     *(get_regs(context) + REG_A0) = (uint64_t)-1;
@@ -12605,7 +12612,7 @@ void implement_mmap(uint64_t* context) {
     return;
   }
 
-  // If addr is 0, choose a free page-aligned region.
+  // Si no dan direccion, busco una libre.
   if (addr == 0)
     addr = choose_mmap_address(context, rounded_length);
 
@@ -12615,17 +12622,17 @@ void implement_mmap(uint64_t* context) {
     return;
   }
 
-  // Validate alignment, existing mappings, and normal memory collisions.
+  // Evito choques con memoria ya usada.
   if (is_mmap_range_free(context, addr, rounded_length) == 0) {
     *(get_regs(context) + REG_A0) = (uint64_t)-1;
     set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
     return;
   }
 
-  // Create mapping entry
+  // Creo la metadata del mapping.
   mapping = create_mapping_entry(addr, length, rounded_length, prot, fd, offset);
 
-  // FASE 9: Map pages and create PTEs pointing to cache frames
+  // Conecto paginas virtuales con cache frames.
   page_count = rounded_length / PAGESIZE;
   for (i = 0; i < page_count; i = i + 1) {
     uint64_t vpage;
@@ -12636,7 +12643,7 @@ void implement_mmap(uint64_t* context) {
     vaddr_current = addr + (i * PAGESIZE);
     vpage = get_page_of_virtual_address(vaddr_current);
 
-    // Find or create cache entry
+    // Obtengo la pagina desde el page cache.
     cache_entry = find_or_create_cache_entry(fd, file_page);
 
     if (cache_entry == (uint64_t*) 0) {
@@ -12645,18 +12652,18 @@ void implement_mmap(uint64_t* context) {
       return;
     }
 
-    // Increment refcount
+    // El mapping usa esta pagina cacheada.
     increment_page_cache_refcount(cache_entry);
 
-    // FASE 9: Create PTE pointing to cache frame
+    // El PTE apunta directo al cache frame.
     cache_frame = (uint64_t) get_page_cache_frame(cache_entry);
     map_page(context, vpage, cache_frame);
   }
 
-  // Add mapping to context
+  // Guardo el mapping en el contexto.
   add_mapping_to_context(context, mapping);
 
-  // Return mapped address
+  // Devuelvo la direccion mapeada.
   *(get_regs(context) + REG_A0) = addr;
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
 }
@@ -12671,7 +12678,7 @@ void implement_munmap(uint64_t* context) {
 
   addr = *(get_regs(context) + REG_A0);
 
-  // Find mapping
+  // Busco el mapping por direccion.
   mapping = find_mapping(context, addr);
 
   if (mapping == (uint64_t*) 0) {
@@ -12680,7 +12687,7 @@ void implement_munmap(uint64_t* context) {
     return;
   }
 
-  // Decrement refcounts for cache entries
+  // Bajo refcount de cada pagina.
   page_count = get_mapping_rounded_length(mapping) / PAGESIZE;
   for (i = 0; i < page_count; i = i + 1) {
     file_page = get_mapping_offset(mapping) / PAGESIZE + i;
@@ -12692,7 +12699,7 @@ void implement_munmap(uint64_t* context) {
     set_PTE_for_page(get_pt(context), get_page_of_virtual_address(addr + (i * PAGESIZE)), 0);
   }
 
-  // Remove mapping from context
+  // Quito el mapping del contexto.
   remove_mapping_from_context(context, addr);
 
   *(get_regs(context) + REG_A0) = 0;
@@ -12710,7 +12717,7 @@ void implement_msync(uint64_t* context) {
 
   addr = *(get_regs(context) + REG_A0);
 
-  // Find mapping
+  // Busco el mapping por direccion.
   mapping = find_mapping(context, addr);
 
   if (mapping == (uint64_t*) 0) {
@@ -12719,7 +12726,7 @@ void implement_msync(uint64_t* context) {
     return;
   }
 
-  // Sync dirty pages to file
+  // Solo sincronizo paginas modificadas.
   page_count = get_mapping_rounded_length(mapping) / PAGESIZE;
   for (i = 0; i < page_count; i = i + 1) {
     file_page = get_mapping_offset(mapping) / PAGESIZE + i;
@@ -12727,7 +12734,7 @@ void implement_msync(uint64_t* context) {
 
     if (cache_entry != (uint64_t*) 0) {
       if (get_page_cache_dirty(cache_entry)) {
-        // Write cache frame to file (FASE 7)
+        // Persisto el frame en el archivo.
         bytes_to_write = get_mapping_original_length(mapping) - (i * PAGESIZE);
         if (bytes_to_write > PAGESIZE)
           bytes_to_write = PAGESIZE;
